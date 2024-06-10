@@ -2,7 +2,7 @@ SRCS = main.cpp
 OBJ = $(SRCS:.cpp=.o)
 CPP = c++
 RM = rm -f
-CPPFLAGS = -Wall -Wextra -Werror -std=c++0x -pthread
+CPPFLAGS = -Wall -Wextra -Werror -fsanitize=thread -g
 NAME = philo
 
 all: $(NAME)

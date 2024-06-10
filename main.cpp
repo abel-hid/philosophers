@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <string>
+#include <atomic>
 
 class Philo {
 private:
@@ -19,11 +20,14 @@ private:
     std::mutex *rightFork;
     std::mutex *printMutex;
     std::vector<Philo> *philos;
+    int number_of_meals;
+    std::atomic<int> is_dead; // Use atomic for is_dead
 public:
     Philo();
     ~Philo();
     void eat();
     void think();
+    void *monitor(void *arg);
     void print(const std::string& message);
     void setId(int id) { this->id = id; }
     int getId() { return id; }
@@ -47,11 +51,20 @@ public:
     std::vector<Philo> *getPhilos() { return philos; }
     void setStart_time(size_t start_time) { this->start_time = start_time; }
     size_t getStart_time() { return start_time; }
+    void setNumber_of_meals(int number_of_meals) { this->number_of_meals = number_of_meals; }
+    int getNumber_of_meals() { return number_of_meals; }
+    void setIs_dead(int is_dead) { this->is_dead.store(is_dead); } // Use atomic store
+    int getIs_dead() { return this->is_dead.load(); } // Use atomic load
 };
 
 Philo::~Philo() {}
 
-Philo::Philo() : id(0), nb_meals(0), time_ToDie(0), time_ToEat(0), time_ToSleep(0), numberOfPhilosophers(0), leftFork(nullptr), rightFork(nullptr), printMutex(nullptr), philos(nullptr) {}
+Philo::Philo() : id(0), nb_meals(0), time_ToDie(0), time_ToEat(0), time_ToSleep(0), numberOfPhilosophers(0), leftFork(nullptr), rightFork(nullptr), printMutex(nullptr), philos(nullptr) 
+{
+    number_of_meals = 0;
+    start_time = 0;
+    is_dead = 0;
+}
 
 size_t get_time() 
 {
@@ -60,7 +73,7 @@ size_t get_time()
     return tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-void my_sleep(int time) 
+void my_sleep(size_t time) 
 {
     size_t start = get_time();
     while (get_time() - start < time)
@@ -74,21 +87,25 @@ void Philo::eat()
     std::unique_lock<std::mutex> right(*rightFork);
     print("has taken a fork");
     print("is eating");
-    usleep(time_ToEat * 1000);
-    print("has finished eating");
-    nb_meals++;
+    number_of_meals++;
+    my_sleep(time_ToEat);
+    left.unlock();
+    right.unlock();
 }
 
 void Philo::think() 
 {
+    print("is sleeping");
+    my_sleep(time_ToSleep);
     print("is thinking");
-    usleep(time_ToSleep * 1000);
 }
 
 void Philo::print(const std::string& message) 
 {
+    if (is_dead.load())
+        return;
     std::lock_guard<std::mutex> lock(*printMutex);
-    size_t current_time = get_time() - start_time;
+    size_t current_time = get_time() -  start_time;
     std::cout << current_time << " " << id << " " << message << std::endl;
 }
 
@@ -104,18 +121,53 @@ void init(Philo *data, int ac, char **av)
         data->setNb_meals(-1);
 }
 
-
 void *run(void* arg) 
 {
     Philo* philo = static_cast<Philo*>(arg);
-    if(philo->getId() % 2 == 0)
+    if (philo->getId() % 2 == 0)
         usleep(100);
-    while (true)
+    while (!philo->getIs_dead())
     {
         philo->eat();
+        if (philo->getNumber_of_meals() == philo->getNb_meals() && philo->getNb_meals() != -1 && philo->getIs_dead() == 0)
+            break;
         philo->think();
     }
     return NULL;
+}
+
+void *monitor(void *arg) 
+{
+    Philo *data = static_cast<Philo*>(arg);
+    size_t current_time;
+
+    while (true) 
+    {
+        bool all_eaten = true;
+        for (int i = 0; i < data->getNumberOfPhilosophers(); ++i) 
+        {
+            current_time = get_time();
+            if (current_time - data->getPhilos()->at(i).getStart_time() > static_cast<size_t>(data->getTime_ToDie())) 
+            {
+                std::lock_guard<std::mutex> lock(*data->getPrintMutex());
+                for (int j = 0; j < data->getNumberOfPhilosophers(); ++j) 
+                {
+                    data->getPhilos()->at(j).setIs_dead(1);
+                }
+                std::cout << current_time - data->getPhilos()->at(i).getStart_time() << " " << data->getPhilos()->at(i).getId() << " died" << std::endl;
+                return NULL;
+            }
+            if (data->getPhilos()->at(i).getNumber_of_meals() != data->getNb_meals() && data->getNb_meals() != -1)
+                all_eaten = false;
+        }
+        if (all_eaten) 
+        {
+            std::lock_guard<std::mutex> lock(*data->getPrintMutex());
+            std::cout << "All philosophers have eaten " << data->getNb_meals() << " times" << std::endl;
+            return NULL;
+        }
+        usleep(100);
+    }
 }
 
 void create_philos(Philo *data) 
@@ -145,10 +197,15 @@ void create_philos(Philo *data)
     {
         pthread_create(&threads[i], NULL, run, &philos[i]);
     }
+
+    pthread_t monitor_thread;
+    pthread_create(&monitor_thread, NULL, monitor, &philos[0]);
+
     for (int i = 0; i < num_philos; ++i) 
     {
         pthread_join(threads[i], NULL);
     }
+    pthread_join(monitor_thread, NULL);
 }
 
 int main(int ac, char **av) 
@@ -161,6 +218,5 @@ int main(int ac, char **av)
     Philo data;
     init(&data, ac, av);
     create_philos(&data);
-
     return 0;
 }
