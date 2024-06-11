@@ -7,6 +7,8 @@
 #include <string>
 #include <atomic>
 
+std::mutex lastMealMutex;
+std::mutex mealsMutex;
 class Philo {
 private:
     int id;
@@ -19,18 +21,17 @@ private:
     int numberOfPhilosophers;
     std::mutex *leftFork;
     std::mutex *rightFork;
-    std::mutex mealsMutex;
     std::mutex *printMutex;
     std::mutex timeMutex;
-    std::vector<Philo> *philos;
+    std::vector<Philo*> *philos;
     int number_of_meals;
     std::atomic<int> is_dead;
 public:
     std::mutex deadMutex;
-    std::mutex lastMealMutex;
     Philo();
     ~Philo();
     void eat();
+    static void *monitor(void *arg) ;
     void think();
     void print(const std::string& message);
     void setId(int id) { this->id = id; }
@@ -51,19 +52,19 @@ public:
     void setNb_meals(int nb_meals) { this->nb_meals = nb_meals; }
     void setNumberOfPhilosophers(int numberOfPhilosophers) { this->numberOfPhilosophers = numberOfPhilosophers; }
     int getNumberOfPhilosophers() { return numberOfPhilosophers; }
-    void setPhilos(std::vector<Philo> *philos) { this->philos = philos; }
-    std::vector<Philo> *getPhilos() { return philos; }
+    void setPhilos(std::vector<Philo*> *philos) { this->philos = philos; }
+    std::vector<Philo*> *getPhilos() { return philos; }
     void setStart_time(size_t start_time) { this->start_time = start_time; }
     size_t getStart_time() { return start_time; }
     void setNumber_of_meals(int number_of_meals) { this->number_of_meals = number_of_meals; }
     int getNumber_of_meals() { return number_of_meals; }
-    void setIs_dead(int is_dead) { this->is_dead.store(is_dead); } // Use atomic store
-    int getIs_dead() { return this->is_dead.load(); } // Use atomic load
+    void setIs_dead(int is_dead) { this->is_dead.store(is_dead); }
+    int getIs_dead() { return this->is_dead.load(); }
     void create_philos(Philo *data);
     void setLast_meal(size_t last_meal) { this->last_meal = last_meal; }
     size_t getLast_meal() 
     {
-        return last_meal; 
+        return (last_meal);
     }
 };
 
@@ -92,23 +93,32 @@ void my_sleep(size_t time)
 
 void Philo::eat() 
 {
-    leftFork->lock();
+    if (nb_meals != -1) 
+    {
+        mealsMutex.lock();
+        if (number_of_meals >= nb_meals)
+        {
+            mealsMutex.unlock();
+            return;
+        }
+        mealsMutex.unlock();
+    }
+    std::lock_guard<std::mutex> lock(*leftFork);
     print("has taken a fork");
-    rightFork->lock();
+    std::lock_guard<std::mutex> lock2(*rightFork);
     print("has taken a fork");
     print("is eating");
     my_sleep(time_ToEat);
-    leftFork->unlock();
-    rightFork->unlock();
+
+    lastMealMutex.lock();
+    last_meal = get_time();
+    lastMealMutex.unlock();
     
-    {
-        std::lock_guard<std::mutex> lock(lastMealMutex);
-        last_meal = get_time();
-    }
     if (nb_meals != -1) 
     {
-        std::lock_guard<std::mutex> lock(mealsMutex);
+        mealsMutex.lock();
         number_of_meals++;
+        mealsMutex.unlock();
     }
 }
 
@@ -120,12 +130,13 @@ void Philo::think()
 }
 
 void Philo::print(const std::string& message) 
-{
+{   
     if (is_dead.load())
         return;
-    std::lock_guard<std::mutex> lock(*printMutex);
+    (*printMutex).lock();
     size_t current_time = get_time() - start_time;
     std::cout << current_time << " " << id << " " << message << std::endl;
+    (*printMutex).unlock();
 }
 
 void init(Philo *data, int ac, char **av) 
@@ -148,14 +159,27 @@ void *run(void* arg)
     while (!philo->getIs_dead())
     {
         philo->eat();
-        if (philo->getNumber_of_meals() == philo->getNb_meals() && philo->getNb_meals() != -1 && philo->getIs_dead() == 0)
-            break;
         philo->think();
     }
     return NULL;
 }
 
-void *monitor(void *arg) 
+int check_all_have_eaten(Philo *data) 
+{
+    for (int i = 0; i < data->getNumberOfPhilosophers(); ++i) 
+    {
+        mealsMutex.lock();
+        if (data->getPhilos()->at(i)->getNumber_of_meals() != data->getNb_meals())
+        {
+            mealsMutex.unlock();
+            return 0;
+        }
+        mealsMutex.unlock();
+    }
+    return 1;
+}
+
+void *Philo::monitor(void *arg) 
 {
     Philo *data = static_cast<Philo*>(arg);
     size_t current_time;
@@ -167,68 +191,76 @@ void *monitor(void *arg)
         {
             current_time = get_time();
             {
-                std::lock_guard<std::mutex> lock(data->lastMealMutex);
-                if (current_time - data->getPhilos()->at(i).getLast_meal() > static_cast<size_t>(data[i].getTime_ToDie()))
+                lastMealMutex.lock();
+                if (current_time - data->getPhilos()->at(i)->getLast_meal() > static_cast<size_t>(data->getPhilos()->at(i)->getTime_ToDie()))
                 {
                     for (int j = 0; j < data->getNumberOfPhilosophers(); ++j)
-                        data->getPhilos()->at(j).setIs_dead(1);
-                    std::lock_guard<std::mutex> lock(*data->getPrintMutex());
-                    std::cout << current_time - data->getPhilos()->at(i).getStart_time() << " " << data->getPhilos()->at(i).getId() << " died" << std::endl;
+                        data->getPhilos()->at(j)->setIs_dead(1);
+                    (*data->getPhilos()->at(i)->getPrintMutex()).lock();
+                    std::cout << current_time - data->getPhilos()->at(i)->getStart_time() << " " << data->getPhilos()->at(i)->getId() << " died" << std::endl;
+                    (*data->getPhilos()->at(i)->getPrintMutex()).unlock();
                     data->setIs_dead(1);
+                    lastMealMutex.unlock();
                     return NULL;
                 }
+                lastMealMutex.unlock();
+                if(check_all_have_eaten(data))
+                    all_eaten = true;
             }
-            if (data->getPhilos()->at(i).getNb_meals() != -1 && data->getPhilos()->at(i).getNumber_of_meals() < data->getNb_meals())
-                all_eaten = true;
-        }
-        if (all_eaten) 
-        {
-            std::lock_guard<std::mutex> lock(*data->getPrintMutex());
-            std::cout << "All philosophers have eaten " << data->getNb_meals() << " times" << std::endl;
-            data->setIs_dead(1);
-            return NULL;
+            if(all_eaten)
+            {
+                for (int j = 0; j < data->getNumberOfPhilosophers(); ++j)
+                    data->getPhilos()->at(j)->setIs_dead(1);
+                return NULL;
+            }
         }
     }
     return NULL;
 }
-
 void Philo::create_philos(Philo *data) 
 {
     int num_philos = data->getNumberOfPhilosophers();
-    std::vector<Philo> philos(num_philos);
+    std::vector<Philo*> philos(num_philos);
     std::vector<pthread_t> threads(num_philos);
     std::vector<std::mutex> forks(num_philos);
     std::mutex printMutex;
 
     for (int i = 0; i < num_philos; ++i) 
     {
-        philos[i].setStart_time(get_time());
-        philos[i].setLast_meal(get_time());
-        philos[i].setNumberOfPhilosophers(num_philos);
-        philos[i].setPhilos(&philos);
-        philos[i].setId(i + 1);
-        philos[i].setTime_ToDie(data->getTime_ToDie());
-        philos[i].setTime_ToEat(data->getTime_ToEat());
-        philos[i].setTime_ToSleep(data->getTime_ToSleep());
-        philos[i].setNb_meals(data->getNb_meals());
-        philos[i].setLeftFork(&forks[i]);
-        philos[i].setRightFork(&forks[(i + 1) % num_philos]);
-        philos[i].setPrintMutex(&printMutex);
+        philos[i] = new Philo();
+        philos[i]->setStart_time(get_time());
+        philos[i]->setLast_meal(get_time());
+        philos[i]->setNumberOfPhilosophers(num_philos);
+        philos[i]->setPhilos(&philos);
+        philos[i]->setId(i + 1);
+        philos[i]->setTime_ToDie(data->getTime_ToDie());
+        philos[i]->setTime_ToEat(data->getTime_ToEat());
+        philos[i]->setTime_ToSleep(data->getTime_ToSleep());
+        philos[i]->setNb_meals(data->getNb_meals());
+        philos[i]->setLeftFork(&forks[i]);
+        philos[i]->setRightFork(&forks[(i + 1) % num_philos]);
+        philos[i]->setPrintMutex(&printMutex);
     }
 
     for (int i = 0; i < num_philos; ++i) 
     {
-        pthread_create(&threads[i], NULL, run, &philos[i]);
+        pthread_create(&threads[i], NULL, run, philos[i]);
     }
 
     pthread_t monitor_thread;
-    pthread_create(&monitor_thread, NULL, monitor, &philos[0]);
+    pthread_create(&monitor_thread, NULL, Philo::monitor, philos[0]);
 
-    for (int i = 0; i < num_philos; ++i) 
+    for (int i = 0; i < num_philos; ++i)
     {
-        pthread_detach(threads[i]);
+        pthread_join(threads[i], NULL);
     }
+
     pthread_join(monitor_thread, NULL);
+
+    for (int i = 0; i < num_philos; ++i)
+    {
+        delete philos[i];
+    }
 }
 
 int main(int ac, char **av) 
