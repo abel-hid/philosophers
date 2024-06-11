@@ -1,4 +1,4 @@
-SRCS = main.cpp
+SRCS = main.cpp philo.cpp utils.cpp
 OBJ = $(SRCS:.cpp=.o)
 CPP = c++
 RM = rm -f
