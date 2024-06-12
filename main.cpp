@@ -1,3 +1,15 @@
+/* ************************************************************************** */
+/*                                                                            */
+/*                                                        :::      ::::::::   */
+/*   main.cpp                                           :+:      :+:    :+:   */
+/*                                                    +:+ +:+         +:+     */
+/*   By: abel-hid <abel-hid@student.42.fr>          +#+  +:+       +#+        */
+/*                                                +#+#+#+#+#+   +#+           */
+/*   Created: 2024/06/12 08:56:30 by abel-hid          #+#    #+#             */
+/*   Updated: 2024/06/12 08:57:18 by abel-hid         ###   ########.fr       */
+/*                                                                            */
+/* ************************************************************************** */
+
 #include "philo.hpp"
 
 std::mutex lastMealMutex;
@@ -53,7 +65,7 @@ void *Philo::monitor(void *arg)
                     (*data->getPhilos()->at(i)->getPrintMutex()).unlock();
                     data->setIs_dead(1);
                     lastMealMutex.unlock();
-                    return NULL;
+                    exit(0);
                 }
                 lastMealMutex.unlock();
                 if(check_all_have_eaten(data))
@@ -115,6 +127,20 @@ void Philo::create_philos(Philo *data)
     }
 }
 
+int parse_args(Philo *data, int ac, char **av) 
+{
+    if(data->getIs_dead() < 0 || data->getNumberOfPhilosophers() < 0 || data->getTime_ToDie() < 0 
+        || data->getTime_ToEat() < 0 || data->getTime_ToSleep() < 0)
+        return 1;
+    if(ac == 6)
+    {
+        if (std::stoi(av[5]) < 0)
+            return 1;
+    }
+    return 0;
+}
+
+
 int main(int ac, char **av) 
 {
     if (ac < 5 || ac > 6) 
@@ -123,7 +149,20 @@ int main(int ac, char **av)
         return 1;
     }
     Philo data;
-    init(&data, ac, av);
+    try
+    {
+        init(&data, ac, av);
+    }
+    catch (std::exception &e)
+    {
+        std::cerr << "Invalid arguments" << std::endl;
+        return 1;
+    }
+    if(parse_args(&data, ac, av))
+    {
+        std::cerr << "Invalid arguments" << std::endl;
+        return 1;
+    }
     data.create_philos(&data);
     return 0;
 }
